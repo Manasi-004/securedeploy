@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SecureDeploy Shop</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="top">
+    <a class="brand" href="/">Secure<span>Deploy</span> Shop</a>
+    <form id="searchForm" class="search">
+      <input id="q" maxlength="100" placeholder="Search products..." autocomplete="off">
+      <button type="submit">Search</button>
+    </form>
+    <nav id="nav"></nav>
+  </header>
+  <section class="hero">
+    <span class="badge">&#128737; Protected by Web Application Firewall</span>
+    <h1>Gear up for less.</h1>
+    <p>Browse our featured products. Every request is inspected before it reaches the shop.</p>
+  </section>
+  <main class="wrap">
+    <h2>Featured products</h2>
+    <div id="grid" class="grid"></div>
+    <p id="msg" class="note"></p>
+  </main>
+  <footer>SecureDeploy Demo Shop &middot; A DevSecOps lab project</footer>
+  <div id="toast" class="toast"></div>
+  <script src="/nav.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
