@@ -207,3 +207,11 @@ def checkout():
 
     
 
+
+
+@app.get("/api/lookup")
+def lookup():
+    uid = request.args.get("id", "")
+    with db_conn() as conn, conn.cursor() as cur:
+        cur.execute("SELECT username FROM users WHERE id = " + uid)
+        return jsonify(rows=cur.fetchall())
