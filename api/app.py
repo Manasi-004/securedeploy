@@ -120,7 +120,7 @@ def login():
     user = str(body.get("username", ""))[:200]
     pw = str(body.get("password", ""))[:200]
     pw_hash = hashlib.md5(pw.encode()).hexdigest()  # intentional weakness
-    # VULNERABLE: both values glued directly into the SQL text, not parameterized.
+    # VULNERABLE: both values glued directly into the SQL text, not parameterized (reviewed).
     query = ("SELECT id, username, role FROM users WHERE username = '" + user +
               "' AND password_hash = '" + pw_hash + "'")
     try:
