@@ -1,0 +1,26 @@
+rules:
+  - id: securedeploy.sqli-string-built-query
+    mode: taint
+    languages: [python]
+    severity: ERROR
+    message: >-
+      A SQL string built from variables (concatenation, f-string, format or %) is passed
+      straight to execute(). This is SQL injection (CWE-89). Use a parameterized query:
+      cur.execute("... WHERE name = %s", (value,))
+    metadata:
+      cwe: "CWE-89: SQL Injection"
+      owasp: "A03:2021 - Injection"
+    pattern-sources:
+      - pattern: request.args.get(...)
+      - pattern: request.form.get(...)
+      - pattern: request.get_json(...)
+      - patterns:
+          - pattern: '"..." + $X'
+          - pattern-not: '"..." + "..."'
+      - pattern: f"...{$X}..."
+      - pattern: '"...".format(...)'
+      - pattern: '"..." % $X'
+    pattern-sinks:
+      - patterns:
+          - pattern: $CUR.execute($Q)
+          - focus-metavariable: $Q

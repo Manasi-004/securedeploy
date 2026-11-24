@@ -1,0 +1,13 @@
+# Checkov policy for SecureDeploy (no Terraform: it scans Dockerfiles and the GitHub workflows).
+# Any failed check NOT listed under skip-check blocks the pull request.
+# Every skip is a deliberate, written "accepted risk". Add new ones only with a reason.
+directory:
+  - .
+framework:
+  - dockerfile
+  - github_actions
+compact: true
+quiet: true
+skip-check: []
+# Example of an accepted risk (copy the format):
+#  - CKV_DOCKER_2   # HEALTHCHECK missing: reason goes here

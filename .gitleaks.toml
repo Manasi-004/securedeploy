@@ -1,0 +1,9 @@
+title = "SecureDeploy Gitleaks config"
+
+[extend]
+useDefault = true     # use all of Gitleaks' built-in secret rules
+
+# To allow a known-safe false positive, add an entry like this AND explain why:
+# [allowlist]
+# description = "documented false positives"
+# regexes = ['''REPLACE_WITH_EXACT_FAKE_VALUE''']

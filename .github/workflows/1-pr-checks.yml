@@ -1,0 +1,220 @@
+# STAGE 1 - PR security checks. Runs on every pull request into main.
+# No cloud account needed. Findings appear as annotations on the PR, and the final
+# job ("PR Security Gate") fails if ANY blocking check failed, which blocks the merge.
+name: PR Security Checks
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Trivy runs from a Docker image pinned by DIGEST (immutable), not by a movable tag.
+  TRIVY_IMAGE: aquasec/trivy@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb
+
+concurrency:
+  group: pr-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ------------------------------------------------------------------ SAST
+  sast:
+    name: SAST (Semgrep)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Semgrep
+        run: pip install "semgrep>=1.100,<2"
+
+      - name: Run Semgrep (blocks on ERROR severity)
+        id: scan
+        continue-on-error: true
+        run: |
+          semgrep scan api frontend \
+            --config p/python \
+            --config p/owasp-top-ten \
+            --config .semgrep/rules \
+            --severity ERROR --error --metrics=off \
+            --sarif-output=semgrep.sarif
+
+      - name: Post findings as PR annotations
+        if: always()
+        run: python3 .github/scripts/sarif_to_annotations.py semgrep.sarif "Semgrep"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: semgrep-results
+          path: semgrep.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Enforce gate
+        if: steps.scan.outcome == 'failure'
+        run: |
+          echo "::error title=Semgrep gate::Blocking SAST findings were found. See the annotations above."
+          exit 1
+
+  # --------------------------------------------------------------- SECRETS
+  secrets:
+    name: Secret scan (Gitleaks)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # scan the whole history, not just the last commit
+
+      - name: Install Gitleaks (checksum verified)
+        run: |
+          VER=8.21.2
+          BASE="https://github.com/gitleaks/gitleaks/releases/download/v${VER}"
+          curl -sSLO "${BASE}/gitleaks_${VER}_linux_x64.tar.gz"
+          curl -sSLO "${BASE}/gitleaks_${VER}_checksums.txt"
+          grep "gitleaks_${VER}_linux_x64.tar.gz" "gitleaks_${VER}_checksums.txt" | sha256sum -c -
+          tar -xzf "gitleaks_${VER}_linux_x64.tar.gz" gitleaks
+
+      - name: Run Gitleaks
+        id: scan
+        continue-on-error: true
+        run: |
+          ./gitleaks detect --source . --config .gitleaks.toml --redact \
+            --report-format sarif --report-path gitleaks.sarif --exit-code 1
+
+      - name: Post findings as PR annotations
+        if: always()
+        run: python3 .github/scripts/sarif_to_annotations.py gitleaks.sarif "Gitleaks"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitleaks-results
+          path: gitleaks.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Enforce gate
+        if: steps.scan.outcome == 'failure'
+        run: |
+          echo "::error title=Secret scan gate::A secret was detected in the repository history."
+          exit 1
+
+  # ------------------------------------------------ IaC (Dockerfiles, workflows)
+  iac:
+    name: IaC scan (Checkov + Trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Checkov
+        run: pip install "checkov>=3.2,<4"
+
+      - name: Run Checkov (blocks on any failed check not listed in .checkov.yaml)
+        id: checkov
+        continue-on-error: true
+        run: |
+          checkov --config-file .checkov.yaml \
+            --output cli --output sarif \
+            --output-file-path console,checkov.sarif
+
+      - name: Post Checkov findings as PR annotations
+        if: always()
+        run: python3 .github/scripts/sarif_to_annotations.py checkov.sarif "Checkov"
+
+      - name: Trivy config scan (blocks on CRITICAL)
+        id: trivy
+        continue-on-error: true
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$TRIVY_IMAGE" \
+            config . --cache-dir /tmp/trivy-cache \
+            --severity CRITICAL --exit-code 1 \
+            --format sarif --output trivy-iac.sarif
+
+      - name: Post Trivy findings as PR annotations
+        if: always()
+        run: python3 .github/scripts/sarif_to_annotations.py trivy-iac.sarif "Trivy IaC"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: iac-results
+          path: |
+            checkov.sarif
+            trivy-iac.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Enforce gate
+        if: steps.checkov.outcome == 'failure' || steps.trivy.outcome == 'failure'
+        run: |
+          echo "::error title=IaC gate::Checkov or Trivy found blocking problems in Dockerfiles or workflows."
+          exit 1
+
+  # ------------------------------------------------- dependencies + secrets
+  deps:
+    name: Dependencies (Trivy filesystem)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Trivy filesystem scan (blocks on CRITICAL)
+        id: trivy
+        continue-on-error: true
+        run: |
+          docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work" -w /work "$TRIVY_IMAGE" \
+            fs . --cache-dir /tmp/trivy-cache \
+            --scanners vuln,secret,misconfig \
+            --severity CRITICAL --ignore-unfixed --exit-code 1 \
+            --format sarif --output trivy-fs.sarif
+
+      - name: Post findings as PR annotations
+        if: always()
+        run: python3 .github/scripts/sarif_to_annotations.py trivy-fs.sarif "Trivy FS"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-fs-results
+          path: trivy-fs.sarif
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: Enforce gate
+        if: steps.trivy.outcome == 'failure'
+        run: |
+          echo "::error title=Dependency gate::CRITICAL vulnerabilities or secrets found in the repository."
+          exit 1
+
+  # ------------------------------------------------------------------ GATE
+  # Mark THIS job ("PR Security Gate") as the one required check for merging.
+  gate:
+    name: PR Security Gate
+    runs-on: ubuntu-latest
+    needs: [sast, secrets, iac, deps]
+    if: always()
+    steps:
+      - name: Summarise
+        run: |
+          echo "sast:    ${{ needs.sast.result }}"
+          echo "secrets: ${{ needs.secrets.result }}"
+          echo "iac:     ${{ needs.iac.result }}"
+          echo "deps:    ${{ needs.deps.result }}"
+          if [ "${{ needs.sast.result }}" != "success" ] || \
+             [ "${{ needs.secrets.result }}" != "success" ] || \
+             [ "${{ needs.iac.result }}" != "success" ] || \
+             [ "${{ needs.deps.result }}" != "success" ]; then
+            echo "::error title=PR Security Gate::One or more security checks failed. Merge is blocked."
+            exit 1
+          fi
+          echo "All security checks passed."
